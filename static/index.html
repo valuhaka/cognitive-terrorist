@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+
+<title>Folder Viewer</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+<script>
+  // configure pdf.js worker
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+</script>
+
+<style>
+body{font-family:sans-serif}
+button{margin:4px}
+table{border-collapse:collapse}
+td{border:1px solid #ccc;padding:4px}
+</style>
+
+</head>
+<body>
+
+<h2>Files</h2>
+<div id="filelist"></div>
+
+<div id="viewer"></div>
+
+<script>
+
+//-- initialisation and file loading --//
+
+async function load_files() {
+  const opt = {
+    "verbose": true
+  };
+
+  const res = await fetch("/list");
+  const files = await res.json();
+
+  const list = document.getElementById("filelist");
+  list.innerHTML = "";
+
+  if (opt.verbose) {
+    console.log("retrieved file list");
+  }
+
+  files.forEach(name => {
+    const btn = document.createElement("button");
+    btn.textContent = name;
+
+    const lower = name.toLowerCase();
+
+    if (lower.endsWith(".pdf")) {
+      btn.onclick = () => open_pdf(name);
+    }
+    else if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".csv")) {
+      btn.onclick = () => open_sheet(name);
+    }
+    else {
+      btn.onclick = () => window.open("/files/" + name);
+    }
+
+    list.appendChild(btn);
+  });
+}
+
+//-- pdf handling --//
+
+async function open_pdf(name) {
+  const opt = {
+    "scale": 1.5,
+    "verbose": true
+  };
+
+  const url = "/files/" + name;
+
+  if (opt.verbose) {
+    console.log("loading pdf: " + url);
+  }
+
+  const pdf = await pdfjsLib.getDocument(url).promise;
+  const viewer = document.getElementById("viewer");
+  viewer.innerHTML = "";
+
+  for (let page_num = 1; page_num <= pdf.numPages; page_num++) {
+    const page = await pdf.getPage(page_num);
+    const viewport = page.getViewport({ "scale": opt.scale });
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    canvas.style.display = "block";
+    canvas.style.marginBottom = "10px";
+
+    viewer.appendChild(canvas);
+
+    await page.render({
+      "canvasContext": ctx,
+      "viewport": viewport
+    }).promise;
+  }
+}
+
+//-- sheet handling --//
+
+async function open_sheet(name) {
+  const opt = {
+    "header": 1,
+    "verbose": true
+  };
+
+  const res = await fetch("/files/" + name);
+  const buf = await res.arrayBuffer();
+
+  const wb = XLSX.read(buf);
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+
+  const data = XLSX.utils.sheet_to_json(sheet, { "header": opt.header });
+
+  if (opt.verbose) {
+    console.log("loading sheet: " + name);
+  }
+
+  let html = "<table>";
+
+  data.forEach(row => {
+    html += "<tr>";
+    row.forEach(cell => {
+      // enable editing on table cells
+      html += `<td contenteditable="true">${cell ?? ""}</td>`;
+    });
+    html += "</tr>";
+  });
+
+  html += "</table>";
+
+  const btn_export = document.createElement("button");
+  btn_export.textContent = "Download Changes";
+  btn_export.onclick = () => export_sheet(name);
+
+  const viewer = document.getElementById("viewer");
+  viewer.innerHTML = "";
+  viewer.appendChild(btn_export);
+
+  const table_container = document.createElement("div");
+  table_container.innerHTML = html;
+  viewer.appendChild(table_container);
+}
+
+//-- sheet exporting --//
+
+function export_sheet(original_name) {
+  const opt = {
+    "verbose": true
+  };
+
+  if (opt.verbose) {
+    console.log("exporting edited sheet: " + original_name);
+  }
+
+  const table = document.querySelector("#viewer table");
+  const wb = XLSX.utils.table_to_book(table);
+  XLSX.writeFile(wb, "edited_" + original_name);
+}
+
+// execute initial load
+load_files();
+
+</script>
+
+</body>
+</html>
