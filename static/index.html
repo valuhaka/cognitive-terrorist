@@ -32,6 +32,14 @@ td{border:1px solid #ccc;padding:4px}
 
 //-- initialisation and file loading --//
 
+//-- global state --//
+
+const app_state = {
+  "edited_sheets": {}
+};
+
+//-- initialisation and file loading --//
+
 async function load_files() {
   const opt = {
     "verbose": true
@@ -114,58 +122,114 @@ async function open_sheet(name) {
     "verbose": true
   };
 
-  const res = await fetch("/files/" + name);
-  const buf = await res.arrayBuffer();
+  let data;
 
-  const wb = XLSX.read(buf);
-  const sheet = wb.Sheets[wb.SheetNames[0]];
+  if (app_state["edited_sheets"][name]) {
+    if (opt.verbose) {
+      console.log("loading sheet from local state: " + name);
+    }
+    data = app_state["edited_sheets"][name];
+  } else {
+    if (opt.verbose) {
+      console.log("fetching sheet from server: " + name);
+    }
+    const res = await fetch("/files/" + name);
+    const buf = await res.arrayBuffer();
 
-  const data = XLSX.utils.sheet_to_json(sheet, { "header": opt.header });
+    const wb = XLSX.read(buf);
+    const sheet = wb.Sheets[wb.SheetNames[0]];
 
-  if (opt.verbose) {
-    console.log("loading sheet: " + name);
+    data = XLSX.utils.sheet_to_json(sheet, { "header": opt.header });
+    
+    app_state["edited_sheets"][name] = data;
   }
+
+  render_table(name, data);
+}
+
+//-- table rendering and binding --//
+
+function render_table(name, data) {
+  const opt = {
+    "verbose": true
+  };
 
   let html = "<table>";
 
-  data.forEach(row => {
+  data.forEach((row, r_idx) => {
     html += "<tr>";
-    row.forEach(cell => {
-      // enable editing on table cells
-      html += `<td contenteditable="true">${cell ?? ""}</td>`;
+    row.forEach((cell, c_idx) => {
+      html += `<td contenteditable="true" data-row="${r_idx}" data-col="${c_idx}">${cell ?? ""}</td>`;
     });
     html += "</tr>";
   });
 
   html += "</table>";
 
-  const btn_export = document.createElement("button");
-  btn_export.textContent = "Download Changes";
-  btn_export.onclick = () => export_sheet(name);
+  const btn_save = document.createElement("button");
+  btn_save.textContent = "Save to Server";
+  btn_save.onclick = () => save_sheet(name);
 
   const viewer = document.getElementById("viewer");
   viewer.innerHTML = "";
-  viewer.appendChild(btn_export);
+  viewer.appendChild(btn_save);
 
   const table_container = document.createElement("div");
   table_container.innerHTML = html;
   viewer.appendChild(table_container);
+
+  const cells = table_container.querySelectorAll("td");
+  cells.forEach(cell => {
+    cell.addEventListener("input", function() {
+      const r = this.getAttribute("data-row");
+      const c = this.getAttribute("data-col");
+      app_state["edited_sheets"][name][r][c] = this.innerText;
+      
+      if (opt.verbose) {
+          console.log("updated cell [" + r + "," + c + "] in state");
+      }
+    });
+  });
 }
 
-//-- sheet exporting --//
+//-- sheet saving --//
 
-function export_sheet(original_name) {
+async function save_sheet(original_name) {
   const opt = {
+    "book_type": "xlsx",
+    "type": "array",
     "verbose": true
   };
 
   if (opt.verbose) {
-    console.log("exporting edited sheet: " + original_name);
+    console.log("transmitting edited sheet to server: " + original_name);
   }
 
-  const table = document.querySelector("#viewer table");
-  const wb = XLSX.utils.table_to_book(table);
-  XLSX.writeFile(wb, "edited_" + original_name);
+  const ws = XLSX.utils.aoa_to_sheet(app_state["edited_sheets"][original_name]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  
+  const wb_out = XLSX.write(wb, { "bookType": opt.book_type, "type": opt.type });
+
+  const res = await fetch("/files/" + original_name, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream"
+    },
+    body: wb_out
+  });
+
+  if (res.ok) {
+    if (opt.verbose) {
+      console.log("server acknowledged write operation.");
+    }
+    alert("File successfully overwritten on server.");
+  } else {
+    if (opt.verbose) {
+      console.error("server rejected write operation.");
+    }
+    alert("Failed to save file.");
+  }
 }
 
 // execute initial load
